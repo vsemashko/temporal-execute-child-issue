@@ -1,0 +1,108 @@
+version: "3.5"
+services:
+  cassandra1:
+    image: cassandra:${CASSANDRA_VERSION:-3.11.5}
+    container_name: cassandra1
+    environment:
+      - CASSANDRA_CLUSTER_NAME=temporal
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+    volumes:
+      - /var/lib/cassandra1
+    ports:
+      - 9042:9042
+
+  cassandra2:
+    image: cassandra:${CASSANDRA_VERSION:-3.11.5}
+    container_name: cassandra2
+    environment:
+      - CASSANDRA_CLUSTER_NAME=temporal
+      - CASSANDRA_SEEDS=cassandra1
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+    volumes:
+      - /var/lib/cassandra2
+
+  cassandra3:
+    image: cassandra:${CASSANDRA_VERSION:-3.11.5}
+    container_name: cassandra3
+    environment:
+      - CASSANDRA_CLUSTER_NAME=temporal
+      - CASSANDRA_SEEDS=cassandra1
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+    volumes:
+      - /var/lib/cassandra3
+
+#  postgresql:
+#    container_name: temporal-postgresql
+#    environment:
+#      POSTGRES_PASSWORD: temporal
+#      POSTGRES_USER: temporal
+#    image: postgres:15.3
+#    # networks:
+#    # - temporal-network
+#    ports:
+#      - 54323:5432
+  elasticsearch:
+    container_name: temporal-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+      # Expose cors to allow dejavu connection
+      - http.port=9200
+      - http.cors.allow-origin=http://localhost:1358,http://127.0.0.1:1358
+      - http.cors.enabled=true
+      - http.cors.allow-headers=X-Requested-With,X-Auth-Token,Content-Type,Content-Length,Authorization
+      - http.cors.allow-credentials=true
+    image: elasticsearch:7.16.2
+    ports:
+      - "9200:9200"
+  temporal:
+    container_name: temporal
+    depends_on:
+      - cassandra1
+      - cassandra2
+      - cassandra3
+      - elasticsearch
+    environment:
+      - CASSANDRA_SEEDS=cassandra1,cassandra2,cassandra3
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-cass.yaml
+      - ENABLE_ES=true
+      - ES_SEEDS=elasticsearch
+      - ES_VERSION=v7
+    image: temporalio/auto-setup:${SERVER_TAG:-1.20.3}
+    ports:
+      - "7233:7233"
+    volumes:
+      - ${DYNAMIC_CONFIG_DIR:-../temporal_docker/dynamicconfig}:/etc/temporal/config/dynamicconfig
+  temporal-admin-tools:
+    container_name: temporal-admin-tools
+    depends_on:
+      - temporal
+    environment:
+      - "TEMPORAL_CLI_ADDRESS=temporal:7233"
+    image: temporalio/admin-tools:${SERVER_TAG:-1.20.3}
+    stdin_open: true
+    tty: true
+  temporal-ui:
+    container_name: temporal-ui
+    depends_on:
+      - temporal
+    environment:
+      - "TEMPORAL_ADDRESS=temporal:7233"
+      - "TEMPORAL_CORS_ORIGINS=http://localhost:3000"
+    image: temporalio/ui:${TEMPORAL_UI_VERSION:-2.10.3}
+    ports:
+      - "8088:8080"
+  temporal-apiserver:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: temporal-apiserver
+    depends_on:
+      - temporal
+    environment:
+      - "REGION=SG"
+      - "KAFKA_ENABLED=false"
+      - "GIN_MODE=release"
+      - "TEMPORAL_HOSTPORT=temporal:7233"
+    ports:
+      - "3030:3030"
